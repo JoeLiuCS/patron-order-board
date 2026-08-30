@@ -2,6 +2,8 @@
 
 A World of Warcraft addon for **Patron crafting orders**. It shows which reagents the patron already provided and which ones you still have to supply, then lets you start and complete the order from that list — without opening each order.
 
+![Patron Order Board next to Alchemy crafting orders](docs/screenshot.jpg)
+
 ## What it does
 
 When you open **Crafting Orders > Patron** at your profession table, a board appears next to the profession window.
