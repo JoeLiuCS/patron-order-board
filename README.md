@@ -49,3 +49,7 @@ Drag the title bar to move it. Use `/pob dock` to pin it back.
 - Only one order can be claimed at a time.
 - **Craft & Complete** skips optional finishing reagents.
 - Recraft orders that still need the original item selected may have to be opened once.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
