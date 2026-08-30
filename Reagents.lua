@@ -2,8 +2,13 @@ local _, ns = ...
 
 local CustomerSource = (Enum.CraftingOrderReagentSource and Enum.CraftingOrderReagentSource.Customer) or 1
 local CrafterSource = (Enum.CraftingOrderReagentSource and Enum.CraftingOrderReagentSource.Crafter) or 2
+local NoneSource = Enum.CraftingOrderReagentSource and Enum.CraftingOrderReagentSource.None
+local BasicType = (Enum.CraftingReagentType and Enum.CraftingReagentType.Basic) or 1
 local ModifyingType = (Enum.CraftingReagentType and Enum.CraftingReagentType.Modifying) or 0
+local FinishingType = (Enum.CraftingReagentType and Enum.CraftingReagentType.Finishing) or 2
+local AutomaticType = (Enum.CraftingReagentType and Enum.CraftingReagentType.Automatic) or 3
 local ModifiedSlot = (Enum.TradeskillSlotDataType and Enum.TradeskillSlotDataType.ModifiedReagent) or 2
+local CurrencySlot = (Enum.TradeskillSlotDataType and Enum.TradeskillSlotDataType.Currency) or 3
 
 local function ReagentItemID(reagent)
 	if not reagent then
@@ -181,23 +186,71 @@ local function SlotQuantityRequired(slot)
 	return maxQ
 end
 
+local function SlotHasIdentifiableReagent(slot)
+	if not slot or not slot.reagents then
+		return false
+	end
+	for _, reagent in ipairs(slot.reagents) do
+		if ReagentItemID(reagent) or ReagentCurrencyID(reagent) then
+			return true
+		end
+	end
+	return false
+end
+
+local function SlotIsConcentration(slot)
+	if not slot or not slot.reagents or not C_TradeSkillUI.GetConcentrationCurrencyID then
+		return false
+	end
+	local info = C_TradeSkillUI.GetChildProfessionInfo and C_TradeSkillUI.GetChildProfessionInfo()
+	local skillLineID = info and (info.professionID or info.skillLineID or info.parentProfessionID)
+	if not skillLineID then
+		return false
+	end
+	local ok, concID = pcall(C_TradeSkillUI.GetConcentrationCurrencyID, skillLineID)
+	if not ok or not concID then
+		return false
+	end
+	for _, reagent in ipairs(slot.reagents) do
+		if ReagentCurrencyID(reagent) == concID then
+			return true
+		end
+	end
+	return false
+end
+
 local function SlotIsRequired(slot)
 	if not slot or slot.hiddenInCraftingForm then
 		return false
 	end
 	local rtype = slot.reagentType
-	if rtype == Enum.CraftingReagentType.Finishing or rtype == Enum.CraftingReagentType.Automatic then
+	if rtype == FinishingType or rtype == AutomaticType then
+		return false
+	end
+	-- Optional reagents (Modifying was named Optional) never belong in You supply
+	-- unless the recipe marks that slot required, e.g. a quality gem.
+	if slot.required == false then
+		return false
+	end
+	if rtype == ModifyingType and slot.required ~= true then
+		return false
+	end
+	if NoneSource and slot.orderSource == NoneSource then
 		return false
 	end
 	if SlotQuantityRequired(slot) <= 0 then
 		return false
 	end
-	if rtype == ModifyingType and slot.required == false then
-		if slot.orderSource ~= CustomerSource and slot.orderSource ~= CrafterSource then
-			return false
-		end
+	if not SlotHasIdentifiableReagent(slot) then
+		return false
 	end
-	return true
+	if SlotIsConcentration(slot) then
+		return false
+	end
+	if slot.dataSlotType == CurrencySlot and rtype ~= BasicType then
+		return false
+	end
+	return rtype == BasicType or slot.required == true
 end
 
 local function SlotAcceptsItem(slot, itemID)
@@ -641,7 +694,7 @@ function ns.AnalyzeOrder(order)
 			if IsCustomerProvided(entry) then
 				table.insert(analysis.provided, chip)
 				analysis.providedCount = analysis.providedCount + 1
-			else
+			elseif entry.isBasicReagent ~= false then
 				chip.have = itemID and ns.CountItem(itemID) or ns.CountCurrency(currencyID)
 				chip.enough = chip.have >= quantity
 				chip.isModified = not entry.isBasicReagent
