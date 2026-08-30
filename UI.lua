@@ -3,7 +3,7 @@ local addonName, ns = ...
 local ROW_HEIGHT = 168
 local ICON_SIZE = 28
 local BOARD_WIDTH = 520
-local BUTTON_WIDTH = 108
+local BUTTON_WIDTH = 124
 local CHIP_GAP = 20
 local QUALITY_ICON_SIZE = 20
 
@@ -324,7 +324,7 @@ local function CreateRow(parent, index)
 
 	row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	row.name:SetPoint("TOPLEFT", 58, -12)
-	row.name:SetPoint("TOPRIGHT", -124, -12)
+	row.name:SetPoint("TOPRIGHT", -140, -12)
 	row.name:SetJustifyH("LEFT")
 	row.name:SetWordWrap(false)
 	row.name:SetMaxLines(1)
@@ -382,23 +382,13 @@ local function CreateRow(parent, index)
 		end
 	end)
 
-	row.craftButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	row.craftButton:SetSize(BUTTON_WIDTH, 22)
-	row.craftButton:SetPoint("TOPRIGHT", -10, -76)
-	row.craftButton:SetText("Craft")
-	row.craftButton:SetScript("OnClick", function(self)
+	row.finishButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+	row.finishButton:SetSize(BUTTON_WIDTH, 22)
+	row.finishButton:SetPoint("TOPRIGHT", -10, -76)
+	row.finishButton:SetText("Craft & Complete")
+	row.finishButton:SetScript("OnClick", function(self)
 		if self.order and self.analysis then
-			ns.CraftOrder(self.order, self.analysis)
-		end
-	end)
-
-	row.completeButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	row.completeButton:SetSize(BUTTON_WIDTH, 22)
-	row.completeButton:SetPoint("TOPRIGHT", -10, -100)
-	row.completeButton:SetText("Complete")
-	row.completeButton:SetScript("OnClick", function(self)
-		if self.order and self.analysis then
-			ns.CompleteOrder(self.order, self.analysis)
+			ns.FinishOrder(self.order, self.analysis)
 		end
 	end)
 
@@ -414,8 +404,7 @@ local function CreateRow(parent, index)
 	end
 	BindTooltip(row.startButton)
 	BindTooltip(row.cancelButton)
-	BindTooltip(row.craftButton)
-	BindTooltip(row.completeButton)
+	BindTooltip(row.finishButton)
 
 	return row
 end
@@ -480,10 +469,9 @@ local function UpdateRow(row, order, analysis)
 	local state = ns.GetOrderState(order)
 	local startReason = ns.GetBusyReason(order, analysis, "start")
 	local cancelReason = ns.GetBusyReason(order, analysis, "cancel")
-	local craftReason = ns.GetBusyReason(order, analysis, "craft")
-	local completeReason = ns.GetBusyReason(order, analysis, "complete")
+	local finishReason = ns.GetBusyReason(order, analysis, "finish")
 
-	local buttons = { row.startButton, row.cancelButton, row.craftButton, row.completeButton }
+	local buttons = { row.startButton, row.cancelButton, row.finishButton }
 	for _, button in ipairs(buttons) do
 		button.order = order
 		button.analysis = analysis
@@ -501,24 +489,21 @@ local function UpdateRow(row, order, analysis)
 			row.startButton:SetText("Starting...")
 		elseif ns.pending.phase == "release" then
 			row.cancelButton:SetText("Cancelling...")
-		elseif ns.pending.phase == "craft" then
-			row.craftButton:SetText("Crafting...")
+		elseif ns.pending.phase == "craft" or ns.pending.phase == "await-fulfill" then
+			row.finishButton:SetText("Crafting...")
 		elseif ns.pending.phase == "fulfill" then
-			row.completeButton:SetText("Completing...")
+			row.finishButton:SetText("Completing...")
 		end
 	else
 		row.startButton:SetText("Start Order")
 		row.cancelButton:SetText("Cancel")
-		row.craftButton:SetText("Craft")
-		row.completeButton:SetText("Complete")
+		row.finishButton:SetText(state == "fulfillable" and "Complete" or "Craft & Complete")
 		row.startButton:SetEnabled(state == "open" and not startReason)
 		row.startButton.reason = startReason
 		row.cancelButton:SetEnabled(state ~= "open" and not cancelReason)
 		row.cancelButton.reason = cancelReason
-		row.craftButton:SetEnabled(state == "claimed" and not craftReason)
-		row.craftButton.reason = craftReason
-		row.completeButton:SetEnabled(state == "fulfillable" and not completeReason)
-		row.completeButton.reason = completeReason
+		row.finishButton:SetEnabled(state ~= "open" and not finishReason)
+		row.finishButton.reason = finishReason
 	end
 end
 
@@ -583,6 +568,17 @@ function ns.CreateUI()
 	frame.hideConcentration.text:SetText("Hide concentration")
 	frame.hideConcentration:SetScript("OnClick", function(self)
 		PatronOrderBoardDB.hideConcentration = self:GetChecked()
+		ns.RefreshUI()
+	end)
+
+	frame.hideUnlearned = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+	frame.hideUnlearned:SetSize(24, 24)
+	frame.hideUnlearned:SetPoint("LEFT", frame.hideConcentration.text, "RIGHT", 10, 0)
+	frame.hideUnlearned.text = frame.hideUnlearned:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	frame.hideUnlearned.text:SetPoint("LEFT", frame.hideUnlearned, "RIGHT", 0, 0)
+	frame.hideUnlearned.text:SetText("Hide unlearned")
+	frame.hideUnlearned:SetScript("OnClick", function(self)
+		PatronOrderBoardDB.hideUnlearned = self:GetChecked()
 		ns.RefreshUI()
 	end)
 
@@ -673,7 +669,9 @@ function ns.RefreshUI()
 		else
 			missingCount = missingCount + 1
 		end
-		if not PatronOrderBoardDB.hideConcentration or not analysis.needsConcentration then
+		local hideByConcentration = PatronOrderBoardDB.hideConcentration and analysis.needsConcentration
+		local hideByUnlearned = PatronOrderBoardDB.hideUnlearned and not analysis.learned
+		if not hideByConcentration and not hideByUnlearned then
 			table.insert(entries, { order = order, analysis = analysis })
 		end
 	end
@@ -686,6 +684,7 @@ function ns.RefreshUI()
 		unlearnedCount
 	))
 	ns.frame.hideConcentration:SetChecked(PatronOrderBoardDB.hideConcentration)
+	ns.frame.hideUnlearned:SetChecked(PatronOrderBoardDB.hideUnlearned)
 
 	if #orders == 0 then
 		ns.frame.status:SetText("No patron orders loaded. Click Refresh, or open Crafting Orders > Patron once.")

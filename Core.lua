@@ -164,9 +164,7 @@ local function HookProfessionsFrame()
 		end)
 	end)
 	ProfessionsFrame:HookScript("OnHide", function()
-		if PatronOrderBoardDB.docked ~= false then
-			ns.HideBoard()
-		end
+		ns.HideBoard()
 	end)
 end
 
@@ -181,6 +179,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 			end
 			if PatronOrderBoardDB.hideConcentration == nil then
 				PatronOrderBoardDB.hideConcentration = false
+			end
+			if PatronOrderBoardDB.hideUnlearned == nil then
+				PatronOrderBoardDB.hideUnlearned = false
 			end
 			PatronOrderBoardDB.readyOnly = nil
 		elseif name == "Blizzard_Professions" then
@@ -201,9 +202,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 			end
 		end)
 	elseif event == "TRADE_SKILL_CLOSE" then
-		if PatronOrderBoardDB and PatronOrderBoardDB.docked ~= false then
-			ns.HideBoard()
-		end
+		ns.HideBoard()
 	elseif event == "CRAFTINGORDERS_CLAIM_ORDER_RESPONSE" then
 		if ns.OnClaimResponse then
 			ns.OnClaimResponse(...)

@@ -2,7 +2,9 @@
 
 A World of Warcraft addon for **Patron crafting orders**. It shows which reagents the patron already provided and which ones you still have to supply, then lets you start and complete the order from that list — without opening each order.
 
-![Patron Order Board next to Alchemy crafting orders](docs/screenshot.jpg)
+![Patron Order Board next to Alchemy crafting orders](docs/alchemy.jpg)
+
+![Patron Order Board next to Jewelcrafting crafting orders](docs/jewelcrafting.jpg)
 
 ## What it does
 
@@ -14,7 +16,7 @@ Each order shows:
 - **You supply** — reagents you must add, with `have/need` counts (gold if you have them, red if you do not)
 - Rewards, time remaining, and whether the recipe is learned
 - **Start Order** — claims the order (same as Blizzard's Start Order)
-- **Complete** — claims if needed, crafts, then turns the order in
+- **Craft & Complete** — crafts the order, then turns it in
 
 Orders you can finish now are sorted to the top.
 
@@ -45,6 +47,5 @@ Drag the title bar to move it. Use `/pob dock` to pin it back.
 
 - You still need to be at the crafting table.
 - Only one order can be claimed at a time.
-- **Complete** skips optional finishing reagents and does not spend Concentration.
+- **Craft & Complete** skips optional finishing reagents.
 - Recraft orders that still need the original item selected may have to be opened once.
-- If a one-click complete stops after Start, click **Complete** again. Each click runs the next step (claim → craft → turn in) without opening the order.

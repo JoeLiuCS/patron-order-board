@@ -106,7 +106,7 @@ function ns.GetBusyReason(order, analysis, action)
 			return "Start the order first."
 		end
 		if state == "fulfillable" then
-			return "Already crafted. Click Complete."
+			return nil
 		end
 		if analysis.missingCount > 0 then
 			return "You are missing reagents you must provide."
@@ -121,6 +121,15 @@ function ns.GetBusyReason(order, analysis, action)
 			return "Craft the order first."
 		end
 		return nil
+	end
+	if action == "finish" then
+		if state == "open" then
+			return "Start the order first."
+		end
+		if state == "fulfillable" then
+			return ns.GetBusyReason(order, analysis, "complete")
+		end
+		return ns.GetBusyReason(order, analysis, "craft")
 	end
 	return nil
 end
@@ -228,10 +237,48 @@ function ns.CancelOrder(order, analysis)
 	C_CraftingOrders.ReleaseOrder(order.orderID, profession)
 end
 
-function ns.CraftOrder(order, analysis)
+local function BeginAutoComplete()
+	if not ns.pending or not ns.pending.autoComplete then
+		ClearPending("Craft finished.")
+		return
+	end
+	ns.pending.phase = "await-fulfill"
+	ns.pending.craftStarted = false
+	ArmTimeout(ns.pending.orderID)
+	local order = ns.pending.order
+	local analysis = ns.pending.analysis
+	local tries = 0
+	local function tryFulfill()
+		if not ns.pending or ns.pending.phase ~= "await-fulfill" then
+			return
+		end
+		local live = ns.GetLiveOrder(order) or order
+		if ns.GetOrderState(live) == "fulfillable" then
+			if ns.pending.timeout then
+				ns.pending.timeout:Cancel()
+			end
+			ns.pending = nil
+			ns.CompleteOrder(live, analysis)
+			return
+		end
+		tries = tries + 1
+		if tries < 8 then
+			C_Timer.After(0.25, tryFulfill)
+		else
+			ClearPending("Craft finished. Click the button again to turn in.")
+		end
+	end
+	C_Timer.After(0.2, tryFulfill)
+end
+
+function ns.CraftOrder(order, analysis, autoComplete)
 	local reason = ns.GetBusyReason(order, analysis, "craft")
 	if reason then
 		ns.Print(reason)
+		return
+	end
+	if ns.GetOrderState(order) == "fulfillable" then
+		ns.CompleteOrder(order, analysis)
 		return
 	end
 	local live = ns.GetLiveOrder(order) or order
@@ -242,6 +289,7 @@ function ns.CraftOrder(order, analysis)
 		phase = "craft",
 		spellID = live.spellID,
 		craftStarted = false,
+		autoComplete = autoComplete and true or false,
 	}
 	ns.RefreshUI()
 	ArmTimeout(live.orderID)
@@ -339,7 +387,7 @@ function ns.OnReleaseResponse(result, orderID)
 end
 
 function ns.OnClaimedOrderRemoved()
-	if ns.pending and ns.pending.phase ~= "fulfill" then
+	if ns.pending and ns.pending.phase ~= "fulfill" and ns.pending.phase ~= "await-fulfill" then
 		ns.pending = nil
 	end
 	ns.RefreshUI()
@@ -357,7 +405,7 @@ function ns.OnCrafted(payload)
 	if not matchesOrder and not matchesSpell then
 		return
 	end
-	ClearPending("Craft finished. Click Complete.")
+	BeginAutoComplete()
 end
 
 function ns.OnSpellCastSucceeded(unit, _, spellID)
@@ -369,7 +417,7 @@ function ns.OnSpellCastSucceeded(unit, _, spellID)
 	end
 	C_Timer.After(0.8, function()
 		if ns.pending and ns.pending.phase == "craft" then
-			ClearPending("Craft finished. Click Complete.")
+			BeginAutoComplete()
 		end
 	end)
 end
@@ -384,7 +432,20 @@ function ns.OnSpellCastFailed(unit, _, spellID)
 	if spellID and ns.pending.spellID and spellID ~= ns.pending.spellID then
 		return
 	end
-	ClearPending("Craft was interrupted. Click Craft again.")
+	ClearPending("Craft was interrupted. Click the button again.")
+end
+
+function ns.FinishOrder(order, analysis)
+	local reason = ns.GetBusyReason(order, analysis, "finish")
+	if reason then
+		ns.Print(reason)
+		return
+	end
+	if ns.GetOrderState(order) == "fulfillable" then
+		ns.CompleteOrder(order, analysis)
+		return
+	end
+	ns.CraftOrder(order, analysis, true)
 end
 
 function ns.OnFulfillResponse(result, orderID)
