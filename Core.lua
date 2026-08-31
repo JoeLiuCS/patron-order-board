@@ -275,7 +275,13 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 		if ns.OnClaimedOrderRemoved then
 			ns.OnClaimedOrderRemoved()
 		end
-	elseif event == "CRAFTINGORDERS_CLAIMED_ORDER_UPDATED" or event == "CRAFTINGORDERS_CLAIMED_ORDER_ADDED" then
+	elseif event == "CRAFTINGORDERS_CLAIMED_ORDER_ADDED" then
+		if ns.OnClaimedOrderAdded then
+			ns.OnClaimedOrderAdded()
+		elseif ns.RefreshUI then
+			ns.RefreshUI()
+		end
+	elseif event == "CRAFTINGORDERS_CLAIMED_ORDER_UPDATED" then
 		if ns.RefreshUI then
 			ns.RefreshUI()
 		end

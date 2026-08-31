@@ -179,18 +179,66 @@ local function ReturnToPatronList()
 	ns.RefreshUI()
 end
 
+local function EnsureCraftingOrdersTab()
+	local frame = ProfessionsFrame
+	if not frame or not frame.SetTab or not frame.craftingOrdersTabID then
+		return
+	end
+	if frame.GetTab and frame:GetTab() == frame.craftingOrdersTabID then
+		return
+	end
+	pcall(function()
+		frame:SetTab(frame.craftingOrdersTabID)
+	end)
+end
+
 local function OpenBlizzardOrder(order)
+	if not order then
+		return false
+	end
+	EnsureCraftingOrdersTab()
 	local page = ProfessionsFrame and ProfessionsFrame.OrdersPage
 	if page and page.ViewOrder then
-		page:ViewOrder(order)
-		return true
+		local ok = pcall(page.ViewOrder, page, order)
+		if ok then
+			return true
+		end
 	end
 	local view = GetOrderView()
 	if view and view.SetOrder then
-		view:SetOrder(order)
-		return true
+		local ok = pcall(view.SetOrder, view, order)
+		if ok then
+			view:Show()
+			if page and page.BrowseFrame then
+				page.BrowseFrame:Hide()
+			end
+			return true
+		end
 	end
 	return false
+end
+
+function ns.ShowClaimedOrderInBlizzard(orderID, fallback)
+	local claimed = ns.GetClaimedOrder()
+	local order
+	if claimed and (not orderID or claimed.orderID == orderID) then
+		order = claimed
+	else
+		order = fallback
+	end
+	if not order then
+		return false
+	end
+	if not OpenBlizzardOrder(order) then
+		return false
+	end
+	if ns.ShowBoard then
+		ns.ShowBoard()
+	end
+	if claimed and claimed.orderID == order.orderID then
+		ns.openOrderViewID = nil
+	end
+	return true
 end
 
 function ns.StartOrder(order, analysis)
@@ -336,7 +384,6 @@ function ns.CraftOrder(order, analysis, autoComplete)
 			C_TradeSkillUI.CraftRecipe(live.spellID, 1, reagents, nil, live.orderID, applyConcentration)
 		end
 	end
-	C_Timer.After(0.15, ReturnToPatronList)
 end
 
 function ns.CompleteOrder(order, analysis)
@@ -368,10 +415,27 @@ function ns.OnClaimResponse(result, orderID)
 		return
 	end
 	if not ResultOK(result) then
+		ns.openOrderViewID = nil
 		ClearPending("Could not start the order.")
 		return
 	end
+	local fallback = ns.pending.order
+	ns.openOrderViewID = orderID
 	ClearPending("Order started.")
+	if not ns.ShowClaimedOrderInBlizzard(orderID, fallback) then
+		C_Timer.After(0.2, function()
+			if ns.openOrderViewID == orderID then
+				ns.ShowClaimedOrderInBlizzard(orderID, fallback)
+			end
+		end)
+	end
+end
+
+function ns.OnClaimedOrderAdded()
+	if ns.openOrderViewID then
+		ns.ShowClaimedOrderInBlizzard(ns.openOrderViewID)
+	end
+	ns.RefreshUI()
 end
 
 function ns.OnReleaseResponse(result, orderID)
@@ -383,10 +447,12 @@ function ns.OnReleaseResponse(result, orderID)
 		ClearPending("Could not cancel the order.")
 		return
 	end
+	ns.openOrderViewID = nil
 	ClearPending("Order cancelled.")
 end
 
 function ns.OnClaimedOrderRemoved()
+	ns.openOrderViewID = nil
 	if ns.pending and ns.pending.phase ~= "fulfill" and ns.pending.phase ~= "await-fulfill" then
 		ns.pending = nil
 	end
@@ -458,4 +524,5 @@ function ns.OnFulfillResponse(result, orderID)
 		return
 	end
 	ClearPending("Order completed.")
+	ReturnToPatronList()
 end
