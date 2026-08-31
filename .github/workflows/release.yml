@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CF_API_KEY: ${{ secrets.CF_API_KEY }}
-      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_OAUTH: ${{ github.token }}
     steps:
       - name: Clone project
         uses: actions/checkout@v4
