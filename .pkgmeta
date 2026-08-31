@@ -1,0 +1,9 @@
+package-as: PatronOrderBoard
+enable-nolib-creation: no
+
+ignore:
+  - .git
+  - .github
+  - .gitignore
+  - README.md
+  - docs
