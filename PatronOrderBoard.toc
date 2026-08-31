@@ -2,7 +2,7 @@
 ## Title: Patron Order Board
 ## Notes: See which Patron order reagents are already provided, then start and complete orders without opening each one.
 ## Author: liush
-## Version: 1.1.8
+## Version: 1.0.2
 ## License: MIT
 ## SavedVariables: PatronOrderBoardDB
 ## Category: Professions

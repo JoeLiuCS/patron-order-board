@@ -711,6 +711,9 @@ end
 function ns.ShowBoard()
 	ns.CreateUI()
 	ns.RestorePosition()
+	if ns.SyncProfession then
+		ns.SyncProfession()
+	end
 	ns.frame:Show()
 	ns.RefreshUI()
 	ns.RequestPatronOrders()
