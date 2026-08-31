@@ -173,7 +173,9 @@ local function ReturnToPatronList()
 			page.OrderView:Hide()
 		end
 	end
-	if ns.ShowBoard then
+	if ns.EnsureBoardShown then
+		ns.EnsureBoardShown()
+	elseif ns.ShowBoard then
 		ns.ShowBoard()
 	end
 	ns.RefreshUI()
@@ -232,7 +234,9 @@ function ns.ShowClaimedOrderInBlizzard(orderID, fallback)
 	if not OpenBlizzardOrder(order) then
 		return false
 	end
-	if ns.ShowBoard then
+	if ns.EnsureBoardShown then
+		ns.EnsureBoardShown()
+	elseif ns.ShowBoard then
 		ns.ShowBoard()
 	end
 	if claimed and claimed.orderID == order.orderID then
@@ -515,6 +519,9 @@ function ns.FinishOrder(order, analysis)
 end
 
 function ns.OnFulfillResponse(result, orderID)
+	if ResultOK(result) and orderID and ns.ForgetOrder then
+		ns.ForgetOrder(orderID)
+	end
 	if not ns.pending or ns.pending.orderID ~= orderID then
 		ns.RefreshUI()
 		return
@@ -525,4 +532,7 @@ function ns.OnFulfillResponse(result, orderID)
 	end
 	ClearPending("Order completed.")
 	ReturnToPatronList()
+	if ns.RequestPatronOrders then
+		ns.RequestPatronOrders({ resort = false, silent = true })
+	end
 end

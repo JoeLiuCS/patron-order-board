@@ -568,7 +568,7 @@ function ns.CreateUI()
 	frame.hideConcentration.text:SetText("Hide concentration")
 	frame.hideConcentration:SetScript("OnClick", function(self)
 		PatronOrderBoardDB.hideConcentration = self:GetChecked()
-		ns.RefreshUI()
+		ns.RefreshUI(true)
 	end)
 
 	frame.hideUnlearned = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
@@ -579,7 +579,7 @@ function ns.CreateUI()
 	frame.hideUnlearned.text:SetText("Hide unlearned")
 	frame.hideUnlearned:SetScript("OnClick", function(self)
 		PatronOrderBoardDB.hideUnlearned = self:GetChecked()
-		ns.RefreshUI()
+		ns.RefreshUI(true)
 	end)
 
 	frame.refreshButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -649,14 +649,83 @@ local function SortOrders(entries)
 		end
 		local aName = ns.GetRecipeDisplayName(a.order, a.analysis)
 		local bName = ns.GetRecipeDisplayName(b.order, b.analysis)
-		return aName < bName
+		if aName ~= bName then
+			return aName < bName
+		end
+		return (a.order.orderID or 0) < (b.order.orderID or 0)
 	end)
 end
 
-function ns.RefreshUI()
+local displayOrderIDs = {}
+local displayOrderProfession = nil
+
+local function CurrentProfession()
+	local info = C_TradeSkillUI.GetChildProfessionInfo and C_TradeSkillUI.GetChildProfessionInfo()
+	return info and info.profession
+end
+
+local function RememberDisplayOrder(entries)
+	displayOrderIDs = {}
+	displayOrderProfession = CurrentProfession()
+	for i, entry in ipairs(entries) do
+		displayOrderIDs[i] = entry.order.orderID
+	end
+end
+
+local function StabilizeEntries(entries, forceResort)
+	local profession = CurrentProfession()
+	if forceResort or profession ~= displayOrderProfession or #displayOrderIDs == 0 then
+		SortOrders(entries)
+		RememberDisplayOrder(entries)
+		return
+	end
+	local byID = {}
+	for _, entry in ipairs(entries) do
+		byID[entry.order.orderID] = entry
+	end
+	local stable = {}
+	local seen = {}
+	for _, orderID in ipairs(displayOrderIDs) do
+		local entry = byID[orderID]
+		if entry then
+			table.insert(stable, entry)
+			seen[orderID] = true
+		end
+	end
+	local newcomers = {}
+	for _, entry in ipairs(entries) do
+		if not seen[entry.order.orderID] then
+			table.insert(newcomers, entry)
+		end
+	end
+	SortOrders(newcomers)
+	for _, entry in ipairs(newcomers) do
+		table.insert(stable, entry)
+	end
+	for i = 1, #entries do
+		entries[i] = nil
+	end
+	for i, entry in ipairs(stable) do
+		entries[i] = entry
+	end
+	RememberDisplayOrder(entries)
+end
+
+local function RestoreScroll(scroll, offset, contentHeight)
+	if not scroll then
+		return
+	end
+	local viewHeight = scroll:GetHeight() or 0
+	local maxScroll = math.max(0, (contentHeight or 0) - viewHeight)
+	scroll:SetVerticalScroll(math.min(math.max(offset or 0, 0), maxScroll))
+end
+
+function ns.RefreshUI(forceResort)
 	if not ns.frame then
 		return
 	end
+	local scroll = ns.frame.scroll
+	local oldScroll = scroll and scroll:GetVerticalScroll() or 0
 	local orders = ns.GetPatronOrders()
 	local entries = {}
 	local readyCount, missingCount, unlearnedCount = 0, 0, 0
@@ -675,7 +744,7 @@ function ns.RefreshUI()
 			table.insert(entries, { order = order, analysis = analysis })
 		end
 	end
-	SortOrders(entries)
+	StabilizeEntries(entries, forceResort)
 
 	ns.frame.status:SetText(string.format(
 		"%d ready   ·   %d missing mats   ·   %d unlearned",
@@ -705,7 +774,15 @@ function ns.RefreshUI()
 	for i = #entries + 1, #ns.frame.rows do
 		ns.frame.rows[i]:Hide()
 	end
-	content:SetHeight(math.max(1, #entries * (ROW_HEIGHT + 10)))
+	local contentHeight = math.max(1, #entries * (ROW_HEIGHT + 10))
+	content:SetHeight(contentHeight)
+	RestoreScroll(scroll, oldScroll, contentHeight)
+end
+
+function ns.EnsureBoardShown()
+	ns.CreateUI()
+	ns.RestorePosition()
+	ns.frame:Show()
 end
 
 function ns.ShowBoard()
@@ -715,7 +792,7 @@ function ns.ShowBoard()
 		ns.SyncProfession()
 	end
 	ns.frame:Show()
-	ns.RefreshUI()
+	ns.RefreshUI(true)
 	ns.RequestPatronOrders()
 end
 

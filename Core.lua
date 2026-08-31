@@ -7,6 +7,7 @@ function ns.Print(message)
 end
 
 ns.orderCache = ns.orderCache or {}
+ns.removedOrderIDs = ns.removedOrderIDs or {}
 ns.liveOrdersProfession = ns.liveOrdersProfession
 ns.pendingListProfession = ns.pendingListProfession
 ns.activeProfession = ns.activeProfession
@@ -24,17 +25,41 @@ local function CopyOrders(source)
 	return copy
 end
 
+local function IsRemovedOrder(orderID)
+	return orderID and ns.removedOrderIDs and ns.removedOrderIDs[orderID]
+end
+
+local function FilterRemoved(orders)
+	local filtered = {}
+	for _, order in ipairs(orders or {}) do
+		if not IsRemovedOrder(order.orderID) then
+			table.insert(filtered, order)
+		end
+	end
+	return filtered
+end
+
+function ns.ForgetOrder(orderID)
+	if not orderID then
+		return
+	end
+	ns.removedOrderIDs[orderID] = true
+	for profession, list in pairs(ns.orderCache) do
+		ns.orderCache[profession] = FilterRemoved(list)
+	end
+end
+
 local function CollectLiveOrders()
 	local orders = {}
 	local npcType = Enum.CraftingOrderType and Enum.CraftingOrderType.Npc
 	local crafterOrders = C_CraftingOrders.GetCrafterOrders and C_CraftingOrders.GetCrafterOrders() or {}
 	for _, order in ipairs(crafterOrders) do
-		if npcType == nil or order.orderType == npcType then
+		if (npcType == nil or order.orderType == npcType) and not IsRemovedOrder(order.orderID) then
 			table.insert(orders, order)
 		end
 	end
 	local claimed = C_CraftingOrders.GetClaimedOrder and C_CraftingOrders.GetClaimedOrder()
-	if claimed and (npcType == nil or claimed.orderType == npcType or claimed.orderType == nil) then
+	if claimed and not IsRemovedOrder(claimed.orderID) and (npcType == nil or claimed.orderType == npcType or claimed.orderType == nil) then
 		local found = false
 		for i, order in ipairs(orders) do
 			if order.orderID == claimed.orderID then
@@ -60,9 +85,9 @@ function ns.GetPatronOrders()
 		if #live > 0 then
 			return live
 		end
-		return CopyOrders(ns.orderCache[profession])
+		return FilterRemoved(CopyOrders(ns.orderCache[profession]))
 	end
-	return CopyOrders(ns.orderCache[profession])
+	return FilterRemoved(CopyOrders(ns.orderCache[profession]))
 end
 
 function ns.IsProfessionOpen()
@@ -84,14 +109,26 @@ function ns.IsPatronTabOpen()
 	return true
 end
 
-function ns.RequestPatronOrders()
+function ns.RequestPatronOrders(opts)
+	local resort = true
+	local silent = false
+	if type(opts) == "table" then
+		if opts.resort == false then
+			resort = false
+		end
+		silent = opts.silent and true or false
+	end
 	local profession = CurrentProfession()
 	if not profession then
-		ns.Print("Open a profession at your crafting table first.")
+		if not silent then
+			ns.Print("Open a profession at your crafting table first.")
+		end
 		return
 	end
 	if not C_CraftingOrders or not C_CraftingOrders.RequestCrafterOrders then
-		ns.Print("Crafting order API is not available.")
+		if not silent then
+			ns.Print("Crafting order API is not available.")
+		end
 		return
 	end
 	ns.pendingListProfession = profession
@@ -119,11 +156,15 @@ function ns.RequestPatronOrders()
 				return
 			end
 			ns.AcceptLiveOrderList()
-			ns.RefreshUI()
+			ns.RefreshUI(resort)
 		end)
 	end
 	C_CraftingOrders.RequestCrafterOrders(request)
-	C_Timer.After(0.5, ns.RefreshUI)
+	C_Timer.After(0.5, function()
+		if requestId == ns.listRequestId then
+			ns.RefreshUI(resort)
+		end
+	end)
 end
 
 function ns.AcceptLiveOrderList()
@@ -141,6 +182,7 @@ function ns.SyncProfession()
 	end
 	ns.activeProfession = profession
 	ns.liveOrdersProfession = nil
+	ns.removedOrderIDs = {}
 	return true
 end
 
