@@ -456,6 +456,96 @@ local function OperationReagents(analysis)
 	return reagents
 end
 
+local function PackList(list)
+	if not list then
+		return {}
+	end
+	if list[1] then
+		return list
+	end
+	local packed = {}
+	for _, entry in pairs(list) do
+		if type(entry) == "table" then
+			table.insert(packed, entry)
+		end
+	end
+	return packed
+end
+
+local function AddOperationReagent(reagents, seen, itemID, currencyID, dataSlotIndex, quantity)
+	if not dataSlotIndex or seen[dataSlotIndex] then
+		return
+	end
+	if not itemID and not currencyID then
+		return
+	end
+	quantity = tonumber(quantity) or 0
+	if quantity <= 0 then
+		return
+	end
+	seen[dataSlotIndex] = true
+	table.insert(reagents, {
+		reagent = {
+			itemID = itemID,
+			currencyID = currencyID,
+		},
+		dataSlotIndex = dataSlotIndex,
+		quantity = quantity,
+	})
+end
+
+local function OperationReagentsForOrder(order, analysis)
+	local reagents = {}
+	local seen = {}
+	local slotMap = {}
+	local schematic = C_TradeSkillUI.GetRecipeSchematic(
+		order.spellID,
+		order.isRecraft and true or false,
+		order.recipeLevel
+	)
+	if schematic and schematic.reagentSlotSchematics then
+		for _, slot in ipairs(schematic.reagentSlotSchematics) do
+			if slot.slotIndex and slot.dataSlotIndex then
+				slotMap[slot.slotIndex] = slot.dataSlotIndex
+			end
+		end
+	end
+
+	for _, entry in ipairs(PackList(order.reagents or order.reagentInfos)) do
+		local info = OrderReagentInfo(entry)
+		local itemID = ReagentItemID(info) or ReagentItemID(entry)
+		local currencyID = ReagentCurrencyID(info) or ReagentCurrencyID(entry)
+		local quantity = GetEntryQuantity(entry, info)
+		local slotIndex = GetEntrySlotIndex(entry, info)
+		local dataSlotIndex = (info and info.dataSlotIndex) or entry.dataSlotIndex or slotMap[slotIndex] or slotIndex
+		AddOperationReagent(reagents, seen, itemID, currencyID, dataSlotIndex, quantity)
+	end
+	for _, chip in ipairs(analysis.provided or {}) do
+		AddOperationReagent(
+			reagents,
+			seen,
+			chip.itemID,
+			chip.currencyID,
+			chip.dataSlotIndex or slotMap[chip.slotIndex] or chip.slotIndex,
+			chip.quantity
+		)
+	end
+	for _, chip in ipairs(analysis.needed or {}) do
+		AddOperationReagent(
+			reagents,
+			seen,
+			chip.itemID,
+			chip.currencyID,
+			chip.dataSlotIndex or slotMap[chip.slotIndex] or chip.slotIndex,
+			chip.quantity
+		)
+	end
+	if #reagents == 0 then
+		return OperationReagents(analysis)
+	end
+	return reagents
+end
+
 local function ExpectedQuality(info)
 	if not info then
 		return 0
@@ -499,14 +589,61 @@ end
 local function QueryOperation(recipeID, orderID, reagents, applyConcentration)
 	reagents = reagents or {}
 	applyConcentration = applyConcentration and true or false
-	local info
+	-- GetCraftingOperationInfo works for any recipe in the open profession.
+	-- GetCraftingOperationInfoForOrder only has real data for the order currently
+	-- loaded in the Blizzard view; other orders can return a dummy 150 cost.
+	local byRecipe = TryOperation(C_TradeSkillUI.GetCraftingOperationInfo, recipeID, reagents, nil, applyConcentration)
+	local byOrder
 	if orderID then
-		info = TryOperation(C_TradeSkillUI.GetCraftingOperationInfoForOrder, recipeID, reagents, orderID, applyConcentration)
-		if info then
-			return info
-		end
+		byOrder = TryOperation(C_TradeSkillUI.GetCraftingOperationInfoForOrder, recipeID, reagents, orderID, applyConcentration)
 	end
-	return TryOperation(C_TradeSkillUI.GetCraftingOperationInfo, recipeID, reagents, nil, applyConcentration)
+	return byRecipe, byOrder
+end
+
+local function OperationSkill(info)
+	if not info then
+		return 0, 0
+	end
+	return (info.baseSkill or 0) + (info.bonusSkill or 0), (info.baseDifficulty or 0) + (info.bonusDifficulty or 0)
+end
+
+local function OperationIsReliable(info)
+	if not info then
+		return false
+	end
+	local skill, difficulty = OperationSkill(info)
+	return skill > 0 or difficulty > 0 or ExpectedQuality(info) > 0
+end
+
+local function OperationIsMaxed(info)
+	if not info then
+		return false
+	end
+	if (info.concentrationCost or 0) <= 0 then
+		return true
+	end
+	local skill, difficulty = OperationSkill(info)
+	if difficulty > 0 and skill >= difficulty then
+		return true
+	end
+	return false
+end
+
+local function PickConcentrationInfo(recipeID, orderID, reagents)
+	local byRecipe, byOrder = QueryOperation(recipeID, orderID, reagents, false)
+	if OperationIsMaxed(byRecipe) and OperationIsReliable(byRecipe) then
+		return byRecipe
+	end
+	if OperationIsMaxed(byOrder) and OperationIsReliable(byOrder) then
+		return byOrder
+	end
+	if OperationIsReliable(byRecipe) then
+		return byRecipe
+	end
+	if OperationIsReliable(byOrder) then
+		return byOrder
+	end
+	return byRecipe or byOrder
 end
 
 function ns.AnalyzeConcentration(order, analysis)
@@ -521,36 +658,39 @@ function ns.AnalyzeConcentration(order, analysis)
 	end
 
 	local recipeID = RecipeIDForOrder(order)
-	local allocated = OperationReagents(analysis)
-	local function Query(apply)
-		return QueryOperation(recipeID, order.orderID, allocated, apply)
-			or QueryOperation(recipeID, order.orderID, {}, apply)
+	local allocated = OperationReagentsForOrder(order, analysis)
+	local noConc = PickConcentrationInfo(recipeID, order.orderID, allocated)
+	if not noConc or not OperationIsReliable(noConc) then
+		return
 	end
 
-	local noConc = Query(false)
-	local withConc = Query(true)
 	local expected = ExpectedQuality(noConc)
-	local expectedWith = ExpectedQuality(withConc)
-	local cost = (withConc and withConc.concentrationCost) or (noConc and noConc.concentrationCost) or 0
-	local info = noConc or withConc
-	if info then
-		analysis.skill = (info.baseSkill or 0) + (info.bonusSkill or 0)
-		analysis.difficulty = (info.baseDifficulty or 0) + (info.bonusDifficulty or 0)
-	end
+	local cost = noConc.concentrationCost or 0
+	local skill, difficulty = OperationSkill(noConc)
+	analysis.skill = skill
+	analysis.difficulty = difficulty
 	analysis.expectedQuality = expected
-	analysis.concentrationCost = cost
+
+	if cost <= 0 or OperationIsMaxed(noConc) then
+		return
+	end
+
+	local recipeInfo = C_TradeSkillUI.GetRecipeInfo and C_TradeSkillUI.GetRecipeInfo(recipeID)
+	local maxQuality = recipeInfo and recipeInfo.maxQuality or 0
+	if maxQuality > 0 and expected >= maxQuality then
+		return
+	end
 
 	local required = analysis.requiredQuality
-	if expected > 0 and required > 1 and expected < required then
-		analysis.needsConcentration = true
-	elseif expected == 0 and expectedWith >= math.max(required, 1) and cost > 0 then
-		analysis.needsConcentration = true
-	elseif expected == 0 and required > 1 and analysis.skill > 0 and analysis.difficulty > analysis.skill then
-		analysis.needsConcentration = true
+	if required > 1 and expected >= required then
+		return
 	end
-	if analysis.needsConcentration and analysis.concentrationCost == 0 and cost > 0 then
-		analysis.concentrationCost = cost
+	if required <= 1 then
+		return
 	end
+
+	analysis.needsConcentration = true
+	analysis.concentrationCost = cost
 end
 
 function ns.IsRecipeLearned(order)
