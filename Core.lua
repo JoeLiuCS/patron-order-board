@@ -376,6 +376,8 @@ SlashCmdList.PATRONORDERBOARD = function(msg)
 	msg = string.lower(msg or "")
 	if msg == "refresh" then
 		ns.RequestPatronOrders()
+	elseif msg == "conc" then
+		ns.DumpConcentration()
 	elseif msg == "dock" then
 		PatronOrderBoardDB.docked = true
 		ns.DockToProfessions()

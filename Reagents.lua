@@ -494,7 +494,24 @@ local function AddOperationReagent(reagents, seen, itemID, currencyID, dataSlotI
 	})
 end
 
-local function OperationReagentsForOrder(order, analysis)
+local function LowestSlotReagent(slot)
+	if not slot or not slot.reagents then
+		return nil, nil
+	end
+	for _, reagent in ipairs(slot.reagents) do
+		local itemID = ReagentItemID(reagent)
+		local currencyID = ReagentCurrencyID(reagent)
+		if itemID or currencyID then
+			return itemID, currencyID
+		end
+	end
+	return nil, nil
+end
+
+-- Reagents the ORDER actually crafts with: patron mats, then the lowest
+-- quality option for empty required slots. Never the player's bag upgrades
+-- and never the player's remaining concentration.
+local function ConcentrationReagents(order, analysis)
 	local reagents = {}
 	local seen = {}
 	local slotMap = {}
@@ -511,15 +528,6 @@ local function OperationReagentsForOrder(order, analysis)
 		end
 	end
 
-	for _, entry in ipairs(PackList(order.reagents or order.reagentInfos)) do
-		local info = OrderReagentInfo(entry)
-		local itemID = ReagentItemID(info) or ReagentItemID(entry)
-		local currencyID = ReagentCurrencyID(info) or ReagentCurrencyID(entry)
-		local quantity = GetEntryQuantity(entry, info)
-		local slotIndex = GetEntrySlotIndex(entry, info)
-		local dataSlotIndex = (info and info.dataSlotIndex) or entry.dataSlotIndex or slotMap[slotIndex] or slotIndex
-		AddOperationReagent(reagents, seen, itemID, currencyID, dataSlotIndex, quantity)
-	end
 	for _, chip in ipairs(analysis.provided or {}) do
 		AddOperationReagent(
 			reagents,
@@ -530,33 +538,33 @@ local function OperationReagentsForOrder(order, analysis)
 			chip.quantity
 		)
 	end
-	for _, chip in ipairs(analysis.needed or {}) do
-		AddOperationReagent(
-			reagents,
-			seen,
-			chip.itemID,
-			chip.currencyID,
-			chip.dataSlotIndex or slotMap[chip.slotIndex] or chip.slotIndex,
-			chip.quantity
-		)
+	for _, entry in ipairs(PackList(order.reagents or order.reagentInfos)) do
+		if IsCustomerProvided(entry) then
+			local info = OrderReagentInfo(entry)
+			local itemID = ReagentItemID(info) or ReagentItemID(entry)
+			local currencyID = ReagentCurrencyID(info) or ReagentCurrencyID(entry)
+			local quantity = GetEntryQuantity(entry, info)
+			local slotIndex = GetEntrySlotIndex(entry, info)
+			local dataSlotIndex = (info and info.dataSlotIndex) or entry.dataSlotIndex or slotMap[slotIndex] or slotIndex
+			AddOperationReagent(reagents, seen, itemID, currencyID, dataSlotIndex, quantity)
+		end
 	end
-	if #reagents == 0 then
-		return OperationReagents(analysis)
+	if schematic and schematic.reagentSlotSchematics then
+		for _, slot in ipairs(schematic.reagentSlotSchematics) do
+			if SlotIsRequired(slot) and slot.dataSlotIndex and not seen[slot.dataSlotIndex] then
+				local itemID, currencyID = LowestSlotReagent(slot)
+				AddOperationReagent(
+					reagents,
+					seen,
+					itemID,
+					currencyID,
+					slot.dataSlotIndex,
+					SlotQuantityRequired(slot)
+				)
+			end
+		end
 	end
 	return reagents
-end
-
-local function ExpectedQuality(info)
-	if not info then
-		return 0
-	end
-	if type(info.craftingQuality) == "number" and info.craftingQuality > 0 then
-		return info.craftingQuality
-	end
-	if type(info.quality) == "number" and info.quality > 0 then
-		return math.floor(info.quality)
-	end
-	return 0
 end
 
 local function RecipeIDForOrder(order)
@@ -586,66 +594,39 @@ local function TryOperation(api, ...)
 	return nil
 end
 
-local function QueryOperation(recipeID, orderID, reagents, applyConcentration)
-	reagents = reagents or {}
-	applyConcentration = applyConcentration and true or false
-	-- GetCraftingOperationInfo works for any recipe in the open profession.
-	-- GetCraftingOperationInfoForOrder only has real data for the order currently
-	-- loaded in the Blizzard view; other orders can return a dummy 150 cost.
-	local byRecipe = TryOperation(C_TradeSkillUI.GetCraftingOperationInfo, recipeID, reagents, nil, applyConcentration)
-	local byOrder
-	if orderID then
-		byOrder = TryOperation(C_TradeSkillUI.GetCraftingOperationInfoForOrder, recipeID, reagents, orderID, applyConcentration)
+local function QueryOperation(recipeID, order, reagents, applyConcentration)
+	if order and order.orderID then
+		local info = TryOperation(
+			C_TradeSkillUI.GetCraftingOperationInfoForOrder,
+			recipeID,
+			reagents,
+			order.orderID,
+			applyConcentration
+		)
+		if info then
+			return info
+		end
 	end
-	return byRecipe, byOrder
+	return TryOperation(C_TradeSkillUI.GetCraftingOperationInfo, recipeID, reagents, nil, applyConcentration)
 end
 
-local function OperationSkill(info)
-	if not info then
-		return 0, 0
+-- Always concentration-off: the concentration-on query fails when the player
+-- cannot afford the spend, which made the board follow the remaining pool.
+local function GetOperation(recipeID, order, reagents)
+	if reagents and #reagents > 0 then
+		local info = QueryOperation(recipeID, order, reagents, false)
+		if info then
+			return info
+		end
 	end
-	return (info.baseSkill or 0) + (info.bonusSkill or 0), (info.baseDifficulty or 0) + (info.bonusDifficulty or 0)
+	-- Some recipes reject a reconstructed reagent list and answer nothing at all.
+	-- With no allocation the game reports the same base numbers Blizzard shows
+	-- on the order page before you fill any slots.
+	return QueryOperation(recipeID, order, {}, false)
 end
 
-local function OperationIsReliable(info)
-	if not info then
-		return false
-	end
-	local skill, difficulty = OperationSkill(info)
-	return skill > 0 or difficulty > 0 or ExpectedQuality(info) > 0
-end
-
-local function OperationIsMaxed(info)
-	if not info then
-		return false
-	end
-	if (info.concentrationCost or 0) <= 0 then
-		return true
-	end
-	local skill, difficulty = OperationSkill(info)
-	if difficulty > 0 and skill >= difficulty then
-		return true
-	end
-	return false
-end
-
-local function PickConcentrationInfo(recipeID, orderID, reagents)
-	local byRecipe, byOrder = QueryOperation(recipeID, orderID, reagents, false)
-	if OperationIsMaxed(byRecipe) and OperationIsReliable(byRecipe) then
-		return byRecipe
-	end
-	if OperationIsMaxed(byOrder) and OperationIsReliable(byOrder) then
-		return byOrder
-	end
-	if OperationIsReliable(byRecipe) then
-		return byRecipe
-	end
-	if OperationIsReliable(byOrder) then
-		return byOrder
-	end
-	return byRecipe or byOrder
-end
-
+-- Whether the ORDER requires concentration. Never reads the player's remaining
+-- pool and never uses the player's bag upgrades to hide a cost.
 function ns.AnalyzeConcentration(order, analysis)
 	analysis.needsConcentration = false
 	analysis.concentrationCost = 0
@@ -657,40 +638,93 @@ function ns.AnalyzeConcentration(order, analysis)
 		return
 	end
 
-	local recipeID = RecipeIDForOrder(order)
-	local allocated = OperationReagentsForOrder(order, analysis)
-	local noConc = PickConcentrationInfo(recipeID, order.orderID, allocated)
-	if not noConc or not OperationIsReliable(noConc) then
-		return
-	end
-
-	local expected = ExpectedQuality(noConc)
-	local cost = noConc.concentrationCost or 0
-	local skill, difficulty = OperationSkill(noConc)
-	analysis.skill = skill
-	analysis.difficulty = difficulty
-	analysis.expectedQuality = expected
-
-	if cost <= 0 or OperationIsMaxed(noConc) then
-		return
-	end
-
-	local recipeInfo = C_TradeSkillUI.GetRecipeInfo and C_TradeSkillUI.GetRecipeInfo(recipeID)
-	local maxQuality = recipeInfo and recipeInfo.maxQuality or 0
-	if maxQuality > 0 and expected >= maxQuality then
-		return
-	end
-
 	local required = analysis.requiredQuality
-	if required > 1 and expected >= required then
-		return
-	end
 	if required <= 1 then
 		return
 	end
 
-	analysis.needsConcentration = true
-	analysis.concentrationCost = cost
+	local recipeID = RecipeIDForOrder(order)
+	local reagents = ConcentrationReagents(order, analysis)
+	local info = GetOperation(recipeID, order, reagents)
+	if not info then
+		return
+	end
+
+	local skill = (info.baseSkill or 0) + (info.bonusSkill or 0)
+	local difficulty = (info.baseDifficulty or 0) + (info.bonusDifficulty or 0)
+	local currentQuality = tonumber(info.craftingQuality) or 0
+	analysis.skill = skill
+	analysis.difficulty = difficulty
+	analysis.expectedQuality = currentQuality
+
+	-- A cost is always reported for the next quality tier. It only matters when
+	-- the craft falls short of what the patron asked for.
+	if currentQuality > 0 and currentQuality >= required then
+		return
+	end
+
+	local orderCost = tonumber(info.concentrationCost) or 0
+	if orderCost > 0 then
+		analysis.needsConcentration = true
+		analysis.concentrationCost = orderCost
+	end
+end
+
+local DUMP_VARIANTS = {
+	{ label = "plain-off", forOrder = false, conc = false, empty = false },
+	{ label = "plain-on", forOrder = false, conc = true, empty = false },
+	{ label = "order-off", forOrder = true, conc = false, empty = false },
+	{ label = "order-on", forOrder = true, conc = true, empty = false },
+	{ label = "empty-off", forOrder = true, conc = false, empty = true },
+}
+
+-- /pob conc. Prints the raw operation numbers so the concentration rule can be
+-- matched against what Blizzard shows, instead of guessed at.
+function ns.DumpConcentration()
+	local orders = ns.GetPatronOrders()
+	if #orders == 0 then
+		ns.Print("No patron orders loaded.")
+		return
+	end
+	for _, order in ipairs(orders) do
+		local analysis = ns.AnalyzeOrder(order)
+		local recipeID = RecipeIDForOrder(order)
+		local reagents = ConcentrationReagents(order, analysis)
+		ns.Print(string.format(
+			"%s |cffaaaaaa(minQ %d, recipe %s, %d reagents)|r",
+			ns.GetRecipeDisplayName(order, analysis),
+			order.minQuality or 0,
+			tostring(recipeID),
+			#reagents
+		))
+		for _, variant in ipairs(DUMP_VARIANTS) do
+			local info
+			local args = variant.empty and {} or reagents
+			if variant.forOrder and order.orderID then
+				info = TryOperation(
+					C_TradeSkillUI.GetCraftingOperationInfoForOrder,
+					recipeID,
+					args,
+					order.orderID,
+					variant.conc
+				)
+			elseif not variant.forOrder then
+				info = TryOperation(C_TradeSkillUI.GetCraftingOperationInfo, recipeID, args, nil, variant.conc)
+			end
+			if info then
+				print(string.format(
+					"   %s: skill %d/%d  quality %s  cost %s",
+					variant.label,
+					(info.baseSkill or 0) + (info.bonusSkill or 0),
+					(info.baseDifficulty or 0) + (info.bonusDifficulty or 0),
+					tostring(info.craftingQuality),
+					tostring(info.concentrationCost)
+				))
+			else
+				print(string.format("   %s: no data", variant.label))
+			end
+		end
+	end
 end
 
 function ns.IsRecipeLearned(order)
